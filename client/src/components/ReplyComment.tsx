@@ -4,7 +4,7 @@ import "quill/dist/quill.snow.css";
 import "quill-mention/autoregister";
 import { Mention, MentionBlot } from "quill-mention";
 import { db, storage } from "../firebase";
-import { getDocs, collection, addDoc, serverTimestamp } from "firebase/firestore";
+import { getDocs, collection } from "firebase/firestore";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 
 Quill.register({ "blots/mention": MentionBlot, "modules/mention": Mention });
@@ -16,14 +16,21 @@ interface User {
   photoURL?: string;
 }
 
-interface CommentInputProps {
+interface ReplyCommentProps {
   userId: string;
   userName: string;
   userPhoto: string;
+  parentId: string;
+  addReply: (parentId: string, replyText: string) => void;
   isAuthenticated: boolean;
+  onClose: () => void; // Added onClose prop to handle editor visibility
 }
 
-const CommentInput: React.FC<CommentInputProps> = ({ userId, userName, userPhoto }) => {
+const ReplyComment: React.FC<ReplyCommentProps> = ({
+  addReply,
+  parentId,
+  onClose, // Destructure onClose
+}) => {
   const quillRef = useRef<HTMLDivElement | null>(null);
   const editorRef = useRef<Quill | null>(null); // Using ref to store the Quill editor instance
   const [users, setUsers] = useState<User[]>([]);
@@ -93,7 +100,7 @@ const CommentInput: React.FC<CommentInputProps> = ({ userId, userName, userPhoto
         },
       });
     }
-  }, [users]); 
+  }, [users]);
 
   const handleSubmit = async () => {
     if (editorRef.current) {
@@ -103,27 +110,23 @@ const CommentInput: React.FC<CommentInputProps> = ({ userId, userName, userPhoto
         return;
       }
 
-      await addDoc(collection(db, "comments"), {
-        userId,
-        userName,
-        userPhoto,
-        commentText: text,
-        timestamp: serverTimestamp(),
-        attachments: [],
-        reactions: {},
-      });
+      addReply(parentId, text);
 
       // Clear the Quill editor
       editorRef.current.root.innerHTML = "";
+
+      // Close the editor
+      onClose(); // Call the onClose function to hide the editor
     }
   };
 
   return (
     <div>
       <div ref={quillRef} style={{ height: "200px" }}></div>
-      <button onClick={handleSubmit}>Post Comment</button>
+      <button onClick={handleSubmit}>Reply</button>
     </div>
   );
 };
 
-export default CommentInput;
+export default ReplyComment;
+
