@@ -62,13 +62,13 @@ const Comments: React.FC<CommentsProps> = ({ sortOption }) => {
     );
 
     // Function to handle real-time updates
-    const handleSnapshot = async (querySnapshot) => {
-      const commentsData = await Promise.all(querySnapshot.docs.map(async (doc) => {
+    const handleSnapshot = async (querySnapshot:any) => {
+      const commentsData = await Promise.all(querySnapshot.docs.map(async (doc:any) => {
         const commentData = doc.data();
         return {
           id: doc.id,
           ...commentData,
-          timestamp: commentData.timestamp.toDate(),
+          timestamp: commentData.timestamp ? commentData.timestamp.toDate() : null,
           replies: await fetchReplies(doc.id), // Recursively fetch replies
         } as Comment;
       }));
@@ -453,7 +453,7 @@ const Comments: React.FC<CommentsProps> = ({ sortOption }) => {
           <div style={{ position: "absolute", zIndex: 1000 }}>
             <Picker
               data={data}
-              onEmojiSelect={(emojiObject) => {
+              onEmojiSelect={(emojiObject:any) => {
                 handleEmojiReaction(comment.id, emojiObject.native);
                 setEmojiPickerVisible(null);
               }}

@@ -20,7 +20,7 @@ interface ReplyCommentProps {
   userId: string;
   userName: string;
   userPhoto: string;
-  parentId: string;  // This could be either commentId or replyId
+  parentId?: string;  // This could be either commentId or replyId
   commentId: string; // The ID of the original comment
   addReply: (commentId: string, replyText: string, replyId?: string) => void;
   isAuthenticated: boolean;
