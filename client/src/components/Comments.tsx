@@ -1,8 +1,8 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { useAuthState } from "react-firebase-hooks/auth";
 import { auth, db } from "../firebase";
-import { collection, query, orderBy, limit, startAfter, getDocs, doc, updateDoc, arrayUnion, serverTimestamp, getDoc, onSnapshot } from "firebase/firestore";
+import { collection, query, orderBy, limit, startAfter, getDocs, doc,addDoc, updateDoc, serverTimestamp, getDoc, onSnapshot } from "firebase/firestore";
 import moment from "moment";
 import Picker from "@emoji-mart/react";
 import data from '@emoji-mart/data';
@@ -33,6 +33,26 @@ const Comments: React.FC<CommentsProps> = ({ sortOption }) => {
   const [replyingTo, setReplyingTo] = useState<string | null>(null);
   const [isShowMore, setShowMore] = useState<{ [key: string]: boolean }>({});
   const [emojiPickerVisible, setEmojiPickerVisible] = useState<string | null>(null);
+  const [showReplies, setShowReplies] = useState<{ [key: string]: boolean }>({});
+
+  // Recursive function to fetch replies for a comment
+  const fetchReplies = useCallback(async (commentId: string): Promise<Comment[]> => {
+    const repliesQuery = query(
+      collection(db, `comments/${commentId}/replies`),
+      orderBy("timestamp", "desc")
+    );
+    const repliesSnapshot = await getDocs(repliesQuery);
+    
+    return Promise.all(repliesSnapshot.docs.map(async replyDoc => {
+      const replyData = replyDoc.data();
+      return {
+        id: replyDoc.id,
+        ...replyData,
+        timestamp: replyData.timestamp.toDate(),
+        replies: await fetchReplies(replyDoc.id), // Recursively fetch replies
+      } as Comment;
+    }));
+  },[]);
 
   useEffect(() => {
     const commentsQuery = query(
@@ -41,32 +61,61 @@ const Comments: React.FC<CommentsProps> = ({ sortOption }) => {
       limit(8)
     );
 
-    // Set up real-time listener
-    const unsubscribe = onSnapshot(commentsQuery, (querySnapshot) => {
-      const commentsData = querySnapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data(),
+    // Function to handle real-time updates
+    const handleSnapshot = async (querySnapshot) => {
+      const commentsData = await Promise.all(querySnapshot.docs.map(async (doc) => {
+        const commentData = doc.data();
+        return {
+          id: doc.id,
+          ...commentData,
+          timestamp: commentData.timestamp.toDate(),
+          replies: await fetchReplies(doc.id), // Recursively fetch replies
+        } as Comment;
       }));
       setComments(commentsData);
-    });
+    };
+
+    // Set up real-time listener
+    const unsubscribe = onSnapshot(commentsQuery, handleSnapshot);
 
     // Cleanup listener on component unmount
     return () => unsubscribe();
-  }, []);
+  }, [fetchReplies]);
+
+// useEffect(() => {
+//     const commentsQuery = query(
+//       collection(db, "comments"),
+//       orderBy("timestamp"),
+//       limit(8)
+//     );
+
+//     // Set up real-time listener
+//     const unsubscribe = onSnapshot(commentsQuery, (querySnapshot) => {
+//       const commentsData = querySnapshot.docs.map((doc) => ({
+//         id: doc.id,
+//         ...doc.data(),
+//       }));
+//       setComments(commentsData);
+//     });
+
+//     // Cleanup listener on component unmount
+//     return () => unsubscribe();
+//   }, []);
+
 
   useEffect(() => {
     const fetchComments = async () => {
       try {
         const q = query(
           collection(db, "comments"),
-          orderBy(sortOption === "latest" ? "timestamp" : "reactions.👍", "desc"),
+          orderBy(sortOption === "latest" ? "timestamp" : "reactions.👍"),
           limit(8)
         );
         const querySnapshot = await getDocs(q);
         const commentsData = querySnapshot.docs.map((doc) => ({
           id: doc.id,
           ...doc.data(),
-          replies: doc.data().replies ? doc.data().replies : [],
+          replies: doc.data().replies || [],
         })) as Comment[];
 
         setComments(commentsData);
@@ -78,6 +127,7 @@ const Comments: React.FC<CommentsProps> = ({ sortOption }) => {
 
     fetchComments();
   }, [sortOption]);
+
 
   const loadMore = async () => {
     try {
@@ -104,6 +154,9 @@ const Comments: React.FC<CommentsProps> = ({ sortOption }) => {
 
   const handleShowMoreToggle = (id: string) => {
     setShowMore(prev => ({ ...prev, [id]: !prev[id] }));
+  };
+  const handleShowMore = (commentId: string) => {
+    setShowReplies(prev => ({ ...prev, [commentId]: !prev[commentId] }));
   };
 
   const handleEmojiReaction = async (id: string, emoji: string) => {
@@ -143,17 +196,9 @@ const Comments: React.FC<CommentsProps> = ({ sortOption }) => {
   };
 
   const handleReplyEmojiReaction = async (commentId: string, replyId: string, emoji: string) => {
+    console.log("Comment ID:", commentId, "Reply ID:", replyId);
     try {
-      // Log for debugging
-      console.log("commentId:", commentId);
-      console.log("replyId:", replyId);
-      console.log("emoji:", emoji);
-  
-      // Reference to the reply document
       const replyRef = doc(db, "comments", commentId, "replies", replyId);
-      console.log("replyRef:", replyRef.path);
-  
-      // Fetch the reply document
       const docSnap = await getDoc(replyRef);
   
       if (!docSnap.exists()) {
@@ -169,10 +214,7 @@ const Comments: React.FC<CommentsProps> = ({ sortOption }) => {
         [emoji]: (currentReactions[emoji] || 0) + 1,
       };
   
-      // Update the reactions
-      await updateDoc(replyRef, {
-        reactions: updatedReactions,
-      });
+      await updateDoc(replyRef, { reactions: updatedReactions });
   
       // Update the state accordingly
       const updatedComments = comments.map((comment) => {
@@ -196,81 +238,94 @@ const Comments: React.FC<CommentsProps> = ({ sortOption }) => {
     }
   };
   
-  const addReply = async (parentId: string, replyText: string) => {
+  
+  const addReply = async (commentId: string, replyText: string, parentId?: string) => {
     if (!user) {
       console.error("User is not authenticated");
       return;
     }
-
-    const reply = {
-      id: user.uid,
-      userName: user.displayName || "",
-      userPhoto: user.photoURL || "",
-      commentText: replyText,
-      reactions: {},
-      attachments: [],
-      replies: [],
-      timestamp: null,
-    };
-
+  
     try {
-      const commentRef = doc(db, "comments", parentId);
-
-      // First add the reply to the array
-      await updateDoc(commentRef, {
-        replies: arrayUnion(reply)
-      });
-// Now update the timestamp for the specific reply
-const updatedReplies = (await getDoc(commentRef)).data()?.replies.map((r: any) => 
-  r.id === reply ? { ...r, timestamp: serverTimestamp() } : r
-);
-
-// Update the document with the new replies array
-await updateDoc(commentRef, {
-  replies: updatedReplies,
-});
-
-// Update the local state to include the new reply with the timestamp
-setComments((prevComments) =>
-  prevComments.map((comment) =>
-    comment.id === parentId
-      ? { ...comment, replies: updatedReplies }
-      : comment
-  )
-);
-      // // Update the reply with the server timestamp in a separate operation
-      // const replyRef = doc(commentRef, "replies", user.uid); // You may need to adjust this depending on your schema
-      // await updateDoc(replyRef, {
-      //   timestamp: serverTimestamp(), // Set timestamp
-      // });
-
-      // // Update the local state to include the new reply
-      // setComments((prevComments) =>
-      //   prevComments.map((comment) =>
-      //     comment.id === parentId
-      //       ? { ...comment, replies: [...comment.replies, { ...reply, timestamp: new Date() }] }
-      //       : comment
-      //   )
-      // );
+      let docRef;
+  
+      if (parentId) {
+         // If replying to a reply, add to the replies collection of that reply
+         docRef = collection(db, "comments", commentId, "replies", parentId, "replies");
+      } else {
+         // If replying to a comment, add to the replies collection of that comment
+         docRef = collection(db, "comments", commentId, "replies");         
+      }
+  
+      // Generate a unique ID for the reply
+      const replyDocRef = doc(docRef);
+      const id = replyDocRef.id;
+  
+      const newReply =  {
+        id: id,
+        userName: user.displayName || "",
+        userPhoto: user.photoURL || "",
+        commentText: replyText,
+        reactions: {},
+        attachments: [],
+        replies: [],
+        timestamp: serverTimestamp(),
+      };
+  
+      console.log("Reply added successfully with ID:", newReply.id);
+      await addDoc(docRef, newReply);
+        // Update the local state
+    setComments(prevComments =>
+        prevComments.map(comment => {
+          if (comment.id === commentId) {
+            if (!parentId) {
+              // Add reply directly to the comment
+              return {
+                ...comment,
+                replies: [...(comment.replies || []), newReply],
+              };
+            } else {
+              // Find the parent reply and add the new reply
+              return {
+                ...comment,
+                replies: updateNestedReplies(comment.replies || [], parentId, newReply),
+              };
+            }
+          }
+          return comment;
+        })
+      );
     } catch (error) {
       console.error("Error adding reply:", error);
     }
   };
-  const handleCloseEditor = () => {
-    setReplyingTo(null); // Hide the ReplyComment editor
+  
+  // Recursive function to update nested replies
+  const updateNestedReplies = (replies: Comment[], parentId: string, newReply: Comment): Comment[] => {
+    return replies.map(reply => {
+      if (reply.id === parentId) {
+        return {
+          ...reply,
+          replies: [...(reply.replies || []), newReply],
+        };
+      }
+      return {
+        ...reply,
+        replies: updateNestedReplies(reply.replies || [], parentId, newReply),
+      };
+    });
   };
-  return (
-    <div>
-      {comments.map(comment => {
-        const showMore = isShowMore[comment.id] || false;
-        const truncatedText = comment.commentText.slice(0, 125); // Slice text at 125 characters
-        const isTextLong = comment.commentText.length > 125;
 
-        return (
-          <div key={comment.id} style={{ marginBottom: "20px" }}>
-            <img src={comment.userPhoto} alt={comment.userName} style={{ width: "40px", borderRadius: "50%" }} />
-            <p>{comment.userName}</p>
-            <div>
+  const renderReplies = (replies: Comment[]= [], parentCommentId: string) => {
+  
+    return replies.map((reply: Comment) =>{
+        const showMore = isShowMore[reply.id] || false;
+        const truncatedText = reply.commentText.slice(0, 125);
+        const isTextLong = reply.commentText.length > 125;
+        return(
+            <div key={reply.id} style={{ marginLeft: "20px" }}>
+              <img src={reply.userPhoto} alt={reply.userName} style={{ width: "40px", borderRadius: "50%" }} />
+              <p>{reply.userName}</p>
+              <div>
               <p
                 style={{
                   display: showMore || !isTextLong ? "block" : "-webkit-box",
@@ -279,103 +334,168 @@ setComments((prevComments) =>
                   overflow: "hidden",
                   textOverflow: "ellipsis",
                 }}
-                dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(showMore ? comment.commentText : truncatedText) }} // Render sanitized HTML
+                dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(showMore ? reply.commentText : truncatedText) }}
               />
               {isTextLong && (
-                <button onClick={() => handleShowMoreToggle(comment.id)}>
+                <button onClick={() => handleShowMoreToggle(reply.id)}>
                   {showMore ? "Show Less" : "Show More"}
                 </button>
               )}
             </div>
             <div>
-              {comment.attachments.map((url, index) => (
-                <img key={index} src={url} alt="attachment" style={{ width: "50px", height: "50px", objectFit: "cover", marginRight: "5px" }} />
-              ))}
-            </div>
-            <p>{moment(comment.timestamp?.toDate ? comment.timestamp.toDate() : new Date()).fromNow()}</p>
-            <div>
-  {Object.keys(comment.reactions).length > 0 && (
-    <div>
-      {Object.keys(comment.reactions).map((emoji) => (
-        <span key={emoji} style={{ marginRight: "10px" }}>
-          {emoji} {comment.reactions[emoji]}
-        </span>
-      ))}
-    </div>
-  )}
-  <button onClick={() => setEmojiPickerVisible(comment.id)}>React</button>
-  {emojiPickerVisible === comment.id && (
-    <div style={{ position: "absolute", zIndex: 1000 }}>
-      <Picker
-        data={data}
-        onEmojiSelect={(emojiObject:any) => {
-          handleEmojiReaction(comment.id, emojiObject.native); // Pass native emoji
-          setEmojiPickerVisible(null); 
-        }}
-      />
-      
-    </div>
-  )}
-</div>
-
-
-            {/* Reply Section */}
-            <button onClick={() => setReplyingTo(comment.id)}>Reply</button>
-            {replyingTo === comment.id && 
-            <ReplyComment    
-              userId={user?.uid || ""}
-              userName={user?.displayName || ""}
-              userPhoto={user?.photoURL || ""}
-              isAuthenticated={!!user} 
-              parentId={comment.id} 
-              addReply={addReply}
-              onClose={handleCloseEditor} 
-            />
-            }
-
-            {comment.replies?.length > 0 && (
-              <div style={{ marginLeft: "20px" }}>
-                {comment.replies.map((reply, replyIndex) => (
-                  <div key={`${reply.id}-${replyIndex}`}>
-                    <img src={reply.userPhoto} alt={reply.userName} style={{ width: "40px", borderRadius: "50%" }}/>
-                    <p>{reply.userName}</p>
-                    <p dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(reply.commentText) }} /> {/* Render sanitized HTML */}
-                    <p>{moment(reply.timestamp?.toDate ? reply.timestamp.toDate() : new Date()).fromNow()}</p>
-                    <div>
-                      {Object.keys(reply.reactions).length > 0 && (
-                        <div>
-                          {Object.keys(reply.reactions).map((emoji) => (
-                            <span key={emoji} style={{ marginRight: "10px" }}>
-                              {emoji} {reply.reactions[emoji]}
-                            </span>
-                          ))}
-                        </div>
-                      )}
-                      <button onClick={() => setEmojiPickerVisible(reply.id)}>React</button>
-                      {emojiPickerVisible === reply.id && (
-                        <div style={{ position: "absolute", zIndex: 1000 }}>
-                          <Picker
-                            data={data}
-                            onEmojiSelect={(emojiObject:any) => {
-                              handleReplyEmojiReaction(comment.id,reply.id, emojiObject.native); // Pass native emoji
-                              setEmojiPickerVisible(null); 
-                            }}
-                          />
-                          
-                        </div>
-                      )}
-                    </div>
-                    <button onClick={() => setReplyingTo(comment.id)}>Reply</button>
+        {reply.attachments.map((url, idx) => (
+          <img key={`${url}-${idx}`} src={url} alt="attachment" style={{ width: "50px", height: "50px", objectFit: "cover", marginRight: "5px" }} />
+        ))}
+      </div>
+              <p>{moment(reply.timestamp?.toDate ? reply.timestamp.toDate() : new Date()).fromNow()}</p>
+              
+              <div>
+                {Object.keys(reply.reactions).length > 0 && (
+                  <div>
+                    {Object.keys(reply.reactions).map((emoji) => (
+                      <span key={emoji} style={{ marginRight: "10px" }}>
+                        {emoji} {reply.reactions[emoji]}
+                      </span>
+                    ))}
                   </div>
-                ))}
+                )}
+                <button onClick={() => setEmojiPickerVisible(reply.id)}>React</button>
+                {emojiPickerVisible === reply.id && (
+                  <div style={{ position: "absolute", zIndex: 1000 }}>
+                    <Picker
+                      data={data}
+                      onEmojiSelect={(emojiObject: any) => {
+                        handleReplyEmojiReaction(parentCommentId,reply.id, emojiObject.native); // Pass native emoji
+                        setEmojiPickerVisible(null);
+                      }}
+                    />
+                  </div>
+                )}
               </div>
-            )}
+             
+              <button onClick={() => setReplyingTo(reply.id)}>Reply</button>
+              {replyingTo === reply.id && (
+                <ReplyComment
+                  userId={user?.uid || ""}
+                  userName={user?.displayName || ""}
+                  userPhoto={user?.photoURL || ""}
+                  isAuthenticated={!!user}
+                  commentId={parentCommentId}  // Pass the parent comment's ID for top-level reference
+                  parentId={reply.id}          // Pass the current reply's ID as the parentId for the nested reply
+                  addReply={addReply}
+                  onClose={() => setReplyingTo(null)}
+                />
+              )}
+        
+              {/* Recursive call to render nested replies */}
+              {reply.replies.length > 0 && (
+          <div>
+            <button onClick={() => handleShowMore(reply.id)}>
+              {showReplies[reply.id] ? 'Show Less' : 'Show More'}
+            </button>
+            {showReplies[reply.id] && renderReplies(reply.replies,parentCommentId)}
           </div>
-        );
-      })}
+        )}
+            </div>
+          )
+    });
+  };
+  
+  
+
+
+  return (
+    <div>
+      {comments.map((comment, index) => {
+  const showMore = isShowMore[comment.id] || false;
+  const truncatedText = comment.commentText.slice(0, 125);
+  const isTextLong = comment.commentText.length > 125;
+
+  return (
+    <div key={`${comment.id}-${index}`} style={{ marginBottom: "20px" }}>
+      <img src={comment.userPhoto} alt={comment.userName} style={{ width: "40px", borderRadius: "50%" }} />
+      <p>{comment.userName}</p>
+      <div>
+        <p
+          style={{
+            display: showMore || !isTextLong ? "block" : "-webkit-box",
+            WebkitLineClamp: !showMore && isTextLong ? "1" : "none",
+            WebkitBoxOrient: "vertical",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+          }}
+          dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(showMore ? comment.commentText : truncatedText) }}
+        />
+        {isTextLong && (
+          <button onClick={() => handleShowMoreToggle(comment.id)}>
+            {showMore ? "Show Less" : "Show More"}
+          </button>
+        )}
+      </div>
+      <div>
+        {comment.attachments.map((url, idx) => (
+          <img key={`${url}-${idx}`} src={url} alt="attachment" style={{ width: "50px", height: "50px", objectFit: "cover", marginRight: "5px" }} />
+        ))}
+      </div>
+      <p>{moment(comment.timestamp?.toDate ? comment.timestamp.toDate() : new Date()).fromNow()}</p>
+      <div>
+        {Object.keys(comment.reactions).length > 0 && (
+          <div>
+            {Object.keys(comment.reactions).map((emoji) => (
+              <span key={`${emoji}-${comment.id}`} style={{ marginRight: "10px" }}>
+                {emoji} {comment.reactions[emoji]}
+              </span>
+            ))}
+          </div>
+        )}
+        <button onClick={() => setEmojiPickerVisible(comment.id)}>React</button>
+        {emojiPickerVisible === comment.id && (
+          <div style={{ position: "absolute", zIndex: 1000 }}>
+            <Picker
+              data={data}
+              onEmojiSelect={(emojiObject) => {
+                handleEmojiReaction(comment.id, emojiObject.native);
+                setEmojiPickerVisible(null);
+              }}
+            />
+          </div>
+        )}
+      </div>
+
+      {/* Reply Section */}
+      <button onClick={() => setReplyingTo(comment.id)}>Reply</button>
+      {replyingTo === comment.id && 
+        <ReplyComment    
+          userId={user?.uid || ""}
+          userName={user?.displayName || ""}
+          userPhoto={user?.photoURL || ""}
+          isAuthenticated={!!user} 
+          commentId={comment.id} 
+          addReply={addReply}
+          onClose={() => setReplyingTo(null)} 
+        />
+      }
+
+      {comment.replies.length > 0 && 
+      (
+        <div>
+          <button onClick={() => handleShowMore(comment.id)}>
+            {showReplies[comment.id] ? 'Show Less' : 'Show More'}
+          </button>
+          {showReplies[comment.id] && renderReplies(comment.replies, comment.id)}
+        </div>
+      )}
+    </div>
+  );
+})}
+
       <button onClick={loadMore}>Load More</button>
     </div>
   );
 };
+             
+    
+        
+
 
 export default Comments;

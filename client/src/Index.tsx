@@ -19,7 +19,7 @@ const Index: React.FC = () => {
   useEffect(() => {
     const commentsQuery = query(
       collection(db, "comments"),
-      orderBy(sortOption === "latest" ? "timestamp" : "reactions.👍", "desc"),
+      orderBy(sortOption === "latest" ? "timestamp" : "reactions.👍"),
       limit(8)
     );
 

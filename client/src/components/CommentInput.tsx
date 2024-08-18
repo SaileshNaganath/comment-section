@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import React, { useEffect, useRef, useState } from "react";
 import Quill from "quill";
 import "quill/dist/quill.snow.css";
@@ -20,6 +21,8 @@ interface CommentInputProps {
   userId: string;
   userName: string;
   userPhoto: string;
+  parentId?: string;
+  addReply?: (parentId: string, replyText: string) => void;
   isAuthenticated: boolean;
 }
 
@@ -49,7 +52,8 @@ const CommentInput: React.FC<CommentInputProps> = ({ userId, userName, userPhoto
   }, []);
 
   useEffect(() => {
-    if (!editorRef.current && quillRef.current) {
+    // if (!editorRef.current && quillRef.current) {
+    if(quillRef.current){
       editorRef.current = new Quill(quillRef.current, {
         theme: "snow",
         modules: {
@@ -75,8 +79,21 @@ const CommentInput: React.FC<CommentInputProps> = ({ userId, userName, userPhoto
                     if (range) {
                       editorRef.current?.insertEmbed(range.index, "image", fileURL);
                     }
+                    const image = editorRef.current?.root.querySelector(`img[src="${fileURL}"]`) as HTMLImageElement;
+                    if (image) {
+                      image.style.width = '20vw';
+                      image.style.height = '20vh';
+                      image.style.objectFit = 'contain'; // Optional: Adjusts image to fit within given dimensions
+                    }
                   }
                 };
+              },
+              link: () => {
+                const url = prompt("Enter the URL");
+                const range = editorRef.current?.getSelection();
+                if (url && range) {
+                  editorRef.current?.formatText(range.index, range.length, "link", url);
+                }
               },
             },
           },
@@ -94,20 +111,35 @@ const CommentInput: React.FC<CommentInputProps> = ({ userId, userName, userPhoto
       });
     }
   }, [users]); 
+  
 
   const handleSubmit = async () => {
     if (editorRef.current) {
-      const text = editorRef.current.root.innerHTML;
-      if (text.length > 250) {
-        alert("Comment exceeds 250 characters.");
-        return;
-      }
+      const htmlContent = editorRef.current.root.innerHTML;
+      const getTextLength = (html: string) => {
+        // Create a temporary element to parse HTML
+        const tempDiv = document.createElement('div');
+        tempDiv.innerHTML = html;
+  
+        // Remove image tags and get the text content
+        const textOnly = tempDiv.textContent || '';
+  
+        // Return the length of the text content
+        return textOnly.length;
+      };
+      const textLength = getTextLength(htmlContent);
+
+    if (textLength > 250) {
+      alert("Comment exceeds 250 characters.");
+      return;
+    }
+      
 
       await addDoc(collection(db, "comments"), {
         userId,
         userName,
         userPhoto,
-        commentText: text,
+        commentText: htmlContent,
         timestamp: serverTimestamp(),
         attachments: [],
         reactions: {},

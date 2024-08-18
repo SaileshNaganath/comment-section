@@ -7,10 +7,4 @@ service cloud.firestore {
     }
   }
 }
-service firebase.storage {
-  match /b/{bucket}/o {
-    match /comments/{allPaths=**} {
-      allow read, write: if request.auth != null;
-    }
-  }
-}
+

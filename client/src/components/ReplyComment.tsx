@@ -20,19 +20,21 @@ interface ReplyCommentProps {
   userId: string;
   userName: string;
   userPhoto: string;
-  parentId: string;
-  addReply: (parentId: string, replyText: string) => void;
+  parentId: string;  // This could be either commentId or replyId
+  commentId: string; // The ID of the original comment
+  addReply: (commentId: string, replyText: string, replyId?: string) => void;
   isAuthenticated: boolean;
-  onClose: () => void; // Added onClose prop to handle editor visibility
+  onClose: () => void;
 }
 
 const ReplyComment: React.FC<ReplyCommentProps> = ({
   addReply,
   parentId,
-  onClose, // Destructure onClose
+  commentId,
+  onClose,
 }) => {
   const quillRef = useRef<HTMLDivElement | null>(null);
-  const editorRef = useRef<Quill | null>(null); // Using ref to store the Quill editor instance
+  const editorRef = useRef<Quill | null>(null);
   const [users, setUsers] = useState<User[]>([]);
 
   useEffect(() => {
@@ -82,8 +84,21 @@ const ReplyComment: React.FC<ReplyCommentProps> = ({
                     if (range) {
                       editorRef.current?.insertEmbed(range.index, "image", fileURL);
                     }
+                    const image = editorRef.current?.root.querySelector(`img[src="${fileURL}"]`) as HTMLImageElement;
+                    if (image) {
+                      image.style.width = '20vw';
+                      image.style.height = '20vh';
+                      image.style.objectFit = 'contain';
+                    }
                   }
                 };
+              },
+              link: () => {
+                const url = prompt("Enter the URL");
+                const range = editorRef.current?.getSelection();
+                if (url && range) {
+                  editorRef.current?.formatText(range.index, range.length, "link", url);
+                }
               },
             },
           },
@@ -104,21 +119,37 @@ const ReplyComment: React.FC<ReplyCommentProps> = ({
 
   const handleSubmit = async () => {
     if (editorRef.current) {
-      const text = editorRef.current.root.innerHTML;
-      if (text.length > 250) {
+      const htmlContent = editorRef.current.root.innerHTML;
+  
+      // Function to get the text length excluding HTML tags
+      const getTextLength = (html: string) => {
+        const tempDiv = document.createElement('div');
+        tempDiv.innerHTML = html;
+        return tempDiv.textContent?.length || 0;
+      };
+  
+      const textLength = getTextLength(htmlContent);
+  
+      if (textLength > 250) {
         alert("Comment exceeds 250 characters.");
         return;
       }
-
-      addReply(parentId, text);
-
-      // Clear the Quill editor
+  console.log(parentId);
+  console.log(commentId);
+      // Add the reply, taking into account the parentId
+      if (commentId&&parentId) {
+        addReply(commentId, htmlContent, parentId);
+      }
+      else{
+        addReply(commentId, htmlContent);
+      }
+     
+      // Clear the editor content and close the reply section
       editorRef.current.root.innerHTML = "";
-
-      // Close the editor
-      onClose(); // Call the onClose function to hide the editor
+      onClose();
     }
   };
+  
 
   return (
     <div>
@@ -129,4 +160,3 @@ const ReplyComment: React.FC<ReplyCommentProps> = ({
 };
 
 export default ReplyComment;
-
